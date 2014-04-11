@@ -18,6 +18,7 @@ our $serialport;
 our $baudrate;
 our $FT817;
 our $version;
+our $VERSION = '0.9.1';
 our @configdata;
 our @filteredarray;
 our $savedconfig;
@@ -134,7 +135,7 @@ set antenna [HF/6M/FMBCB/AIR/VHF/UHF] [FRONT/BACK]     Sets the antenna to front
 set arts [ON/OFF]                                      Turns ARTS ON or OFF
 set breakin [ON/OFF]                                   Sets Break-in (BK) ON or OFF
 set charger [ON/OFF]                                   Turns the radio charger ON or OFF
-set currentmem [(0-200) or M-PL/M-PU]                  Sets the current memory area to start up in radio
+set currentmem [(0-200) or M-PL/M-PU]                  Sets the current memory area
 set dsp [ON/OFF]                                       Turns DSP on or off if module installed
 set dw [ON/OFF]                                        Enables or Disables Dual Watch
 set fasttune [ON/OFF]                                  Enables or disables Fast Tuning
@@ -246,8 +247,11 @@ exit           Go Back one directory
 
       if ($helptype eq '_MEMMEMORY') {
 print "\nCHOOSE A MEMORY AREA FOR $memtype\n
-list                              Lists the Active memory areas
-[1 - 200] [M-PL] [M-PU]  
+currentmem [(0-200) or M-PL/M-PU]                  Sets the current memory area
+list                                               Lists the Active memory areas
+memarea [1-200/M-PL/M-PU] [ACTIVE/INACTIVE]        Enables or disables given memory area
+
+[1 - 200] [M-PL] [M-PU]                            Select a memory area sub directory
 
 exit           Go Back one directory
 
@@ -295,10 +299,12 @@ ssbstep [1.0/2.5/5.0]                           Sets the SSB STEP in Khz
       if ($helptype eq '_MEMORYOPTS') {
 print "\nMEMORY OPTIONS FOR $memtype \[$currentband\]\n
 
-back                   Back to main directory
-list 		       Shows a list of enabled memory areas	
-show                   Shows the current stored options
-exit                   Exit program
+back                                               Back to main directory
+currentmem [(0-200) or M-PL/M-PU]                  Sets the current memory area
+list 		                                   Shows a list of enabled memory areas	
+memarea [1-200/M-PL/M-PU] [ACTIVE/INACTIVE]        Enables or disables given memory area
+show                                               Shows the current stored options
+exit                                               Exit program
 
 amstep [#]                                      Sets the AM STEP 2.5/5/9/10/12.5/25
 att [ON/OFF]                                    Turns att on or off
@@ -368,7 +374,7 @@ return $ln[1];
 sub createConfig {
 	my $localtime = localtime();
         system("clear");
-        print "***FT817-OS version 0.9***\n";
+        print "***FT817-OS version $VERSION***\n";
         print "Copyright Jordan Rubin 2014\n\n";
 	print "Enter the name of your serial device. i.e. /dev/ttyUSB0\n\n";
 do {
@@ -481,7 +487,7 @@ return 0;
 
 sub banner {
 	system("clear");
-	print "***FT817-OS version 0.9***\nRelease FT817COMM($version)\n";
+	print "***FT817-OS version $VERSION***\nRelease FT817COMM($version)\n";
 	print "Copyright Jordan Rubin 2014, Perl Artistic licence II\n";
 	print "Connected on $serialport at $baudrate bps\n";
 	if($lockfile){print"Locked port at $lockfile\n";}
@@ -797,38 +803,75 @@ return 0;
 ############################################ SHOWSTATUS
 
 sub showStatus {
+       my ($frequency,$vfo,$vfoband,$mode,$tuner,$home,$agc,$dsp,$nb,$txpower,$vox,$memmode,$narfm,$narcwdig,$rptoffset,$tonedcs,$att,$ipo,$fmstep,$amstep,$ssbstep,
+	    $ctcsstone,$dcscode,$claronoff,$currenttuner) = @_;
+		$FT817->setVerbose(0);
+		$currenttuner = $FT817->getTuner(); 
 		print "\nFT817 STATUS\n";
 		print "____________\n";
-		$FT817->setVerbose(0);
+	if ($currenttuner eq 'VFO') {
+		$FT817->quietToggle();
                 $FT817->quietToggle();
-                $FT817->quietToggle();
 		$FT817->setVerbose(0);
-		my $frequency = $FT817->catgetFrequency("1");
-		my $vfo = $FT817->getVfo();
-                my $vfoband = $FT817->getVfoband("$vfo");
-		my $mode = $FT817->catgetMode();
-		my $tuner = $FT817->getTuner();
-		my $home = $FT817->getHome();
-		my $agc = $FT817->getAgc();
-		my $dsp = $FT817->getDsp();
-		my $nb = $FT817->getNb();
-		my $txpower = $FT817->getTxpower();
-                my $vox = $FT817->getVox();
-                my $memmode = $FT817->readMemvfo("$vfo", "$vfoband", 'MODE');
-		my $narfm = $FT817->readMemvfo("$vfo", "$vfoband", 'NARFM');
-                my $narcwdig = $FT817->readMemvfo("$vfo", "$vfoband", 'NARCWDIG');
-		my $rptoffset = $FT817->readMemvfo("$vfo", "$vfoband", 'RPTOFFSET');
-		my $tonedcs = $FT817->readMemvfo("$vfo", "$vfoband", 'TONEDCS');
-		my $att = $FT817->readMemvfo("$vfo", "$vfoband", 'ATT');
-                my $ipo = $FT817->readMemvfo("$vfo", "$vfoband", 'IPO');
-                my $fmstep = $FT817->readMemvfo("$vfo", "$vfoband", 'FMSTEP');
-                my $amstep = $FT817->readMemvfo("$vfo", "$vfoband", 'AMSTEP');
-                my $ssbstep = $FT817->readMemvfo("$vfo", "$vfoband", 'SSBSTEP');
-                my $ctcsstone = $FT817->readMemvfo("$vfo", "$vfoband", 'CTCSSTONE');
-		my $dcscode = $FT817->readMemvfo("$vfo", "$vfoband", 'DCSCODE');
-                my $claronoff = $FT817->readMemvfo("$vfo", "$vfoband", 'CLARIFIER');
-                $FT817->setVerbose(1);
+		$frequency = $FT817->catgetFrequency("1");
+		$vfo = $FT817->getVfo();
+                $vfoband = $FT817->getVfoband("$vfo");
+		$mode = $FT817->catgetMode();
+		$tuner = $FT817->getTuner();
+		$home = $FT817->getHome();
+		$agc = $FT817->getAgc();
+		$dsp = $FT817->getDsp();
+		$nb = $FT817->getNb();
+		$txpower = $FT817->getTxpower();
+                $vox = $FT817->getVox();
+                $memmode = $FT817->readMemvfo("$vfo", "$vfoband", 'MODE');
+		$narfm = $FT817->readMemvfo("$vfo", "$vfoband", 'NARFM');
+                $narcwdig = $FT817->readMemvfo("$vfo", "$vfoband", 'NARCWDIG');
+		$rptoffset = $FT817->readMemvfo("$vfo", "$vfoband", 'RPTOFFSET');
+		$tonedcs = $FT817->readMemvfo("$vfo", "$vfoband", 'TONEDCS');
+		$att = $FT817->readMemvfo("$vfo", "$vfoband", 'ATT');
+                $ipo = $FT817->readMemvfo("$vfo", "$vfoband", 'IPO');
+                $fmstep = $FT817->readMemvfo("$vfo", "$vfoband", 'FMSTEP');
+                $amstep = $FT817->readMemvfo("$vfo", "$vfoband", 'AMSTEP');
+                $ssbstep = $FT817->readMemvfo("$vfo", "$vfoband", 'SSBSTEP');
+                $ctcsstone = $FT817->readMemvfo("$vfo", "$vfoband", 'CTCSSTONE');
+		$dcscode = $FT817->readMemvfo("$vfo", "$vfoband", 'DCSCODE');
+                $claronoff = $FT817->readMemvfo("$vfo", "$vfoband", 'CLARIFIER');
                 print "VFO[$vfo] - $frequency($mode) BAND [$vfoband]\n\n";
+                                      }
+
+        if ($currenttuner eq 'MEMORY') {
+		my $num = $FT817->getCurrentmem();
+                $FT817->quietTunetoggle();
+                $FT817->quietTunetoggle();
+                $FT817->setVerbose(0);
+                $mode = $FT817->catgetMode();
+                $tuner = $FT817->getTuner();
+                $home = $FT817->getHome();
+                $agc = $FT817->getAgc();
+                $dsp = $FT817->getDsp();
+                $nb = $FT817->getNb();
+                $txpower = $FT817->getTxpower();
+                $vox = $FT817->getVox();
+                $frequency = $FT817->readMemory('MEM', "$num", 'RXFREQ');
+                $memmode = $FT817->readMemory('MEM', "$num", 'MODE');
+                $narfm = $FT817->readMemory('MEM', "$num", 'NARFM');
+                $narcwdig = $FT817->readMemory('MEM', "$num", 'NARCWDIG');
+                $rptoffset = $FT817->readMemory('MEM', "$num", 'RPTOFFSET');
+                $tonedcs = $FT817->readMemory('MEM', "$num", 'TONEDCS');
+                $att = $FT817->readMemory('MEM', "$num", 'ATT');
+                $ipo = $FT817->readMemory('MEM', "$num", 'IPO');
+                $fmstep = $FT817->readMemory('MEM', "$num", 'FMSTEP');
+                $amstep = $FT817->readMemory('MEM', "$num", 'AMSTEP');
+                $ssbstep = $FT817->readMemory('MEM', "$num", 'SSBSTEP');
+                $ctcsstone = $FT817->readMemory('MEM', "$num", 'CTCSSTONE');
+                $dcscode = $FT817->readMemory('MEM', "$num", 'DCSCODE');
+                $claronoff = $FT817->readMemory('MEM', "$num", 'CLARIFIER');
+                print "MEMORY[$num] - $frequency($mode)\n\n";
+                                      }
+
+
+                $FT817->setVerbose(1);
                 printf "%-11s%-11s%-11s\n%-11s%-11s%-11s\n", 'TUNER','----->',"$tuner",'HOME','----->',"$home";
                 printf "%-11s%-11s%-11s\n%-11s%-11s%-11s\n", 'AGC','----->',"$agc",'DSP','----->',"$dsp";
                 printf "%-11s%-11s%-11s\n%-11s%-11s%-11s\n", 'NB','----->',"$nb",'TXPOWER','----->',"$txpower";
@@ -955,8 +998,9 @@ elsif ($currentband){
         if ($name eq 'label') {$output = $FT817->writeMemory('home',"$currentband",'label',"$value");}
 		    }
 
-       elsif ($name eq 'list') {memoryList();}
-       else {print "SYNTAX ERROR\n";}
+        elsif ($name eq 'list') {memoryList();}
+        elsif ($name eq 'currentmem') {$FT817->setCurrentmem("$value");}
+        else {print "SYNTAX ERROR\n";}
         if ($name ne 'history' && $name ne 'help' && $name ne 'outputlog' && $name ne 'clear'){
         push @outputs, { "$name $value" => "$output" };
                                                                                               }
@@ -1024,6 +1068,8 @@ do {
 	elsif ($currentband){
         	if ($name eq 'show') {showMemory('MEM',"$currentband");}
                 if ($name eq 'list') {memoryList();}
+                if ($name eq 'memarea') {$FT817->setMemarea("$value","$value2");}
+                if ($name eq 'currentmem') {$FT817->setCurrentmem("$value");}
         	if ($name eq 'mode') {$output = $FT817->writeMemory('mem',"$currentband",'mode',"$value");}
         	if ($name eq 'narfm') {$output = $FT817->writeMemory('mem',"$currentband",'narfm',"$value");}
         	if ($name eq 'narcwdig') {$output = $FT817->writeMemory('mem',"$currentband",'narcwdig',"$value");}
@@ -1045,6 +1091,8 @@ do {
         	if ($name eq 'label') {$output = $FT817->writeMemory('mem',"$currentband",'label',"$value");}
                 	    }
 	elsif ($name eq 'list') {memoryList();}
+        elsif ($name eq 'currentmem') {$FT817->setCurrentmem("$value");}
+        elsif ($name eq 'memarea') {$FT817->setMemarea("$value","$value2");}
         else {print "SYNTAX ERROR\n";}
         $output = undef;
    } while ($back ne '1');
@@ -1161,7 +1209,10 @@ do {
         @values = split(' ', $data);
         my $name = lc($values[0]);
         my $value = uc($values[1]);
+        my $value2 = uc($values[2]);
         if ($name eq 'vfo') {$rootflag = memvfo("$value");}
+        elsif ($name eq 'currentmem') {$FT817->setCurrentmem("$value");}
+        elsif ($name eq 'memarea') {$FT817->setMemarea("$value","$value2");}
 	elsif ($name eq 'home') {$rootflag = memhome("$value");}
         elsif ($name eq 'qmb') {$rootflag = memqmb();}
         elsif ($name eq 'mem') {$rootflag = memmemory();}
@@ -1469,7 +1520,7 @@ FT817OS - Command line operating system for the FT817
 
 =head1 VERSION 
 
-Version 0.9
+Version 0.9.1
 
 =head1 SUPPORT
 
