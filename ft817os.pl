@@ -9,34 +9,10 @@ $serialport $baudrate $cfg_line $cfg_value $savedconfig $saveddigest $testconfig
 #use Data::Dumper;
 #use diagnostics;
 
-our $finish;
-our $input;
-our $data;
-our $configfile = "FT817.cfg";
-our $softcalfile = "FT817.cal";
-our $serialport;
-our $baudrate;
-our $FT817;
-our $version;
-our $VERSION = '0.9.1';
-our @configdata;
-our @filteredarray;
-our $savedconfig;
-our $saveddigest;
-our @history;
-our $MAX_HISTORY;
-our $output;
-our @outputs;
-our $configflag;
-our $directory;
-our @values;
-our $write;
-our $currentdir;
-our $currentband;
-our $memtype;
-our $rootflag;
-our $exitflag;
-$MAX_HISTORY = 50;
+our $finish; our $input; our $data; our $radioconfigfile = "FT817.cfg"; our $memoryfile = "FT817.mem"; our $configfile = "FT817OS.cfg"; our $softcalfile = "FT817.cal"; our $serialport; our $baudrate; our $FT817; 
+our $version; our $VERSION = '0.9.2'; our @configdata; our @filteredarray; our $savedconfig; our $saveddigest; our @history; our $MAX_HISTORY; 
+our $output; our @outputs; our $configflag; our $directory; our @values; our $write; our $currentdir; our $currentband; our $memtype; our 
+$rootflag; our $exitflag; $MAX_HISTORY = 50;
 
 ############################################ HELP
 
@@ -50,13 +26,18 @@ bitwatch [ON/OFF]              Alerts for changed bits in unknown memory areas
 clear                          Clears the screen
 config                         Go to config sub directory
 list                           A list of active memory areas
+load config [filename]         Rewrites the radio config from a file. If no filename is given, uses default
+load memory [filename]         Rewrites the radio memory from a file. If no filename is given, uses default
 memory                         Go to memory sub directory
 debug [ON/OFF]                 Toggles debugger
 help [SYSTEM/CAT/GET/SET]      Shows this help page, returns all commands when no argument given
 history                        Returns the last 50 commands entered
 outputlog                      Shows running log of inputs and cooresponding outputs
 quit / exit                    Exit program
+rebuild softcal [filename]     Rebuilds the software calibration from backup, if no filename given uses default
 restore [####]                 Restores corrupted area of eeprom to default
+save config [filename]         Saves radio config to a file, if no filename is given, uses default
+save memory [filename]         Saves regular memory areas to a file, if no filename is given, uses default
 show flags                     Shows the values of all flags
 show status                    Provides formatted information about the status of the radio
 test calibration               Tests the current digest of the software calibration against the backup
@@ -98,7 +79,7 @@ get arts                                      Returns the status or ARTS
 get breakin				      Returns the status of Break (BK)
 get charger                                   Returns status of the battery charger
 get checksum                                  Returns the EEPROM CHECKSUM Values
-get config                                    These are the HEX values derived from the hardware jumpers J4001-J4009
+get jumper                                    These are the HEX values derived from the hardware jumpers J4001-J4009
 get currentmem                                Returns the currently set memory channel
 get dsp                                       Returns status of the Digital Signal Processor
 get dw                                        Returns the status of DW, Dual Watch
@@ -424,6 +405,7 @@ do {
 		my $test = $FT817->catgetMode();
 		my $times;
 		my @digest;
+                $FT817->setVerbose(0);
 		if ($test){print "\nConnection sucessfull!!!!!\n\n";
 		print "Backing up FT817 calibration settings: ";
                 if (-e $softcalfile) {
@@ -463,6 +445,22 @@ do {
 	print FILE "DIGEST=$digest['1']\n";
 		close FILE;
 		print "           ----> OK\n";	
+ 	print "\nBacking up FT817 memory: ";
+                if (-e $memoryfile) {
+                        print "----> SKIPPING : Memory file $memoryfile exists already!!!!\n";
+                                     }
+                else {
+                        $FT817->saveMemory("$memoryfile");
+                     }
+        print "Backing up FT817 config: ";
+                if (-e $radioconfigfile) {
+                        print "----> SKIPPING : Config file $radioconfigfile exists already!!!!\n";
+                                     }
+                else {
+                        $FT817->saveConfig("$radioconfigfile");
+                     }
+
+        $FT817->setVerbose(0);
 	print"\n\nRe-starting OS.........\n\n";
 	$FT817->closePort();
 	sleep 1;
@@ -488,7 +486,7 @@ return 0;
 sub banner {
 	system("clear");
 	print "***FT817-OS version $VERSION***\nRelease FT817COMM($version)\n";
-	print "Copyright Jordan Rubin 2014, Perl Artistic licence II\n";
+	print "Copyright Jordan Rubin 2014, Perl Artistic license II\n";
 	print "Connected on $serialport at $baudrate bps\n";
 	if($lockfile){print"Locked port at $lockfile\n";}
 	print "\nType 'help' for commands\n\n";
@@ -576,6 +574,74 @@ sub memoryList {
 	my $test = $FT817->getActivelist;
 return 0;
 	       }
+
+
+
+########################################### REBUILDSOFTCAL
+
+sub rebuildSoftcal {
+                my $value2 = shift;
+                print "This is going to re-write your entire software calibration from backup!!! Are you absolutely sure [Y/N]?\nANSWER: ";
+                my $question = <>;
+                chomp $question;
+                $question = lc($question);
+                if ($question eq 'y'){$output = $FT817->rebuildSoftcal("$value2");}
+return 0;
+                   }
+
+########################################### SAVEMEMORY
+
+sub saveMemory {
+        my $value2 = shift;
+        if (!$value2){$value2 = $memoryfile;}
+        if($value2 eq $memoryfile){print "You used the default filename [$value2]. This will overwrite your backup memory file.\n";}
+                print "Backing up memory to $value2. Are you sure [Y/N]? ";
+                my $question = <>;
+                chomp $question;
+                $question = lc($question);
+                if ($question eq 'y'){$output = $FT817->saveMemory("$value2");}
+return 0;
+               }
+
+########################################### LOADCONFIG
+
+sub loadConfig {
+        my $value2 = shift;
+       if (!$value2){$value2 = $radioconfigfile;}
+                print "This will load the radio with the configuration from $value2. Are you sure [Y/N]? ";
+                my $question = <>;
+                chomp $question;
+                $question = lc($question);
+                if ($question eq 'y'){$output = $FT817->loadConfig("$value2");}
+return 0;
+               }
+
+########################################### LOADMEMORY
+
+sub loadMemory {
+        my $value2 = shift;
+       if (!$value2){$value2 = $memoryfile;}
+                print "This will load the radio with the memory from $value2. Are you sure [Y/N]? ";
+                my $question = <>;
+                chomp $question;
+                $question = lc($question);
+                if ($question eq 'y'){$output = $FT817->loadMemory("$value2");}
+return 0;
+               }
+
+########################################### SAVECONFIG
+
+sub saveConfig {
+        my $value2 = shift;
+	if (!$value2){$value2 = $radioconfigfile;}
+        if($value2 eq $radioconfigfile){print "You used the default filename [$value2]. This will overwrite your backup configuration.\n";}
+                print "Backing up configuration to $value2. Are you sure [Y/N]? ";
+                my $question = <>;
+                chomp $question;
+                $question = lc($question);
+                if ($question eq 'y'){$output = $FT817->saveConfig("$value2");}
+return 0;
+               }
 
 ############################################ CONFIGLIST
 
@@ -1363,9 +1429,9 @@ do {
 	$data = prompt();
 	@values = split(' ', $data);
                 my $name = lc($values[0]);
-                my $value = uc($values[1]);
-                my $value2 = uc($values[2]);
-                my $value3 = uc($values[3]);
+                my $value = $values[1];
+                my $value2 = $values[2];
+                my $value3 = $values[3];
 	if ($values[0] eq 'cat' || $values[0] eq 'set' || $values[0] eq 'get') {
 		my $type = $values[0];
 		my $name = lc($values[1]);
@@ -1433,7 +1499,7 @@ do {
 			elsif ($name eq 'breakin') {$output = $FT817->getBk();}
                         elsif ($name eq 'charger') {$output = $FT817->getCharger();}
                         elsif ($name eq 'checksum') {$output = $FT817->getChecksum();}
-                        elsif ($name eq 'config') {$output = $FT817->getConfig();}
+                        elsif ($name eq 'jumper') {$output = $FT817->getConfig();}
                         elsif ($name eq 'currentmem') {$output = $FT817->getCurrentmem();}
                         elsif ($name eq 'dsp') {$output = $FT817->getDsp();}
                         elsif ($name eq 'dw') {$output = $FT817->getDw();}
@@ -1463,6 +1529,7 @@ do {
 				   }
 }
 
+
 	if ($data eq 'quit' || $data eq 'exit'){$finish = '1';}
 	elsif ($data eq 'clear'){banner();}
 	elsif ($data eq 'history'){history();}
@@ -1475,6 +1542,11 @@ do {
 	elsif ($data eq 'bitwatch off') {$output = $FT817->setBitwatch(0);}
 	elsif ($data eq 'bitcheck') {$output = $FT817->bitCheck();}
 	elsif ($name eq 'boundry') {$output = $FT817->boundryCheck("$value","$value2");}
+        elsif ($name eq 'rebuild' && $value eq 'softcal') {rebuildSoftcal("$value2");}
+        elsif ($name eq 'load' && $value eq 'config') {loadConfig("$value2");}
+        elsif ($name eq 'load' && $value eq 'memory') {loadMemory("$value2");}
+        elsif ($name eq 'save' && $value eq 'memory') {saveMemory("$value2");}
+        elsif ($name eq 'save' && $value eq 'config') {saveConfig("$value2");}
 	elsif ($data eq 'test config') {
 		$FT817->setVerbose(0);
 		$output = testConfig();
