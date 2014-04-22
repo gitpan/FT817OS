@@ -1,3 +1,11 @@
+# This is Yaesu FT817OS Command Library Front End
+# Written by Jordan Rubin 
+# For use with the FT817COMM and FT-817 Serial Interface
+#
+# $Id: FT817COMM.pm 2014-22-4 12:00:00Z JRUBIN $
+#
+# Copyright (C) 2014, Jordan Rubin
+# jrubin@cpan.org 
 
 #!/usr/bin/perl
 
@@ -9,10 +17,10 @@ $serialport $baudrate $cfg_line $cfg_value $savedconfig $saveddigest $testconfig
 #use Data::Dumper;
 #use diagnostics;
 
-our $finish; our $input; our $data; our $radioconfigfile = "FT817.cfg"; our $memoryfile = "FT817.mem"; our $configfile = "FT817OS.cfg"; our $softcalfile = "FT817.cal"; our $serialport; our $baudrate; our $FT817; 
-our $version; our $VERSION = '0.9.2'; our @configdata; our @filteredarray; our $savedconfig; our $saveddigest; our @history; our $MAX_HISTORY; 
-our $output; our @outputs; our $configflag; our $directory; our @values; our $write; our $currentdir; our $currentband; our $memtype; our 
-$rootflag; our $exitflag; $MAX_HISTORY = 50;
+our $finish; our $input; our $data; our $memoryfile; our $configfile; our $radioconfigfile; our $softcalfile; our $serialport; our $baudrate; our $FT817; our $radioname; our $default; our $activeradio;
+our $version; our $VERSION = '0.9.3'; our @configdata; our @filteredarray; our $savedconfig; our $saveddigest; our @history; our $MAX_HISTORY;  
+our $output; our @outputs; our $configflag; our $directory; our @values; our $write; our $currentdir; our $currentband; our $name; our $memtype; our 
+$rootflag; our $exitflag; our @mconfigdata; our %radiohash; our @radiodata; our $totalradios; our $localtime = localtime(); our $digest; our $config; $MAX_HISTORY = 50;
 
 ############################################ HELP
 
@@ -22,9 +30,11 @@ sub help {
 
         if ($helptype  eq 'SYSTEM' || !$helptype) {
 print "\nSYSTEM Commmands:\n
+add radio                      Adds a new radio to the system 
 bitwatch [ON/OFF]              Alerts for changed bits in unknown memory areas
 clear                          Clears the screen
 config                         Go to config sub directory
+default radio [radioname]      Sets given radio as the default startup radio
 list                           A list of active memory areas
 load config [filename]         Rewrites the radio config from a file. If no filename is given, uses default
 load memory [filename]         Rewrites the radio memory from a file. If no filename is given, uses default
@@ -35,11 +45,14 @@ history                        Returns the last 50 commands entered
 outputlog                      Shows running log of inputs and cooresponding outputs
 quit / exit                    Exit program
 rebuild softcal [filename]     Rebuilds the software calibration from backup, if no filename given uses default
+remove radio [radioname]       Removes a radio from the system
 restore [####]                 Restores corrupted area of eeprom to default
 save config [filename]         Saves radio config to a file, if no filename is given, uses default
 save memory [filename]         Saves regular memory areas to a file, if no filename is given, uses default
 show flags                     Shows the values of all flags
+show radios                    Lists radio currently configured for FT817OS
 show status                    Provides formatted information about the status of the radio
+switch radio [radioname]       Switches active radio in FT817OS
 test calibration               Tests the current digest of the software calibration against the backup
 test config                    Tests the current radio config against the backed up version
 write [enable/disable]         Turns on EEprom writing capability
@@ -318,17 +331,41 @@ ssbstep [1.0/2.5/5.0]                           Sets the SSB STEP in Khz
 ############################################ STARTUPCHECK
 
 sub startUpcheck{
-        if (-e $configfile) {
-		print "Using $configfile\n";
-		$serialport = readConfigfile('SERIALPORT');
-		$lockfile = readConfigfile('LOCKFILE');
-		$baudrate = readConfigfile('BAUDRATE');
-		$savedconfig = readConfigfile('CONFIG');
-		$saveddigest = readConfigfile('DIGEST');
-            		    }
+	if (-e 'config/radiolist.cfg') {
+	        my ($cfg_line) =@_;
+		@radiodata = undef;
+		$totalradios = 0;
+        	open(MCONFIGFILE, 'config/radiolist.cfg') or die("Unable to open file");
+        	@mconfigdata = <MCONFIGFILE>;
+        	foreach $cfg_line (@mconfigdata)
+                	{
+                	if (index($cfg_line,"#")==0) { next; }
+                my @ln=split(" ",$cfg_line);
+		my $cfgfile = join('','config/',"$ln[1]",'.cfg');
+		my $cnffile = join('','config/',"$ln[1]",'.cnf');
+		my $calfile = join('','config/',"$ln[1]",'.cal');
+                my $memfile = join('','config/',"$ln[1]",'.mem');
+		our $configfile = $cfgfile;
+                $radiodata["$ln[0]"]{'number'} = "$ln[0]";
+		$radiodata["$ln[0]"]{'name'} = "$ln[1]";
+                $radiodata["$ln[0]"]{'default'} = "$ln[2]";
+                $radiodata["$ln[0]"]{'radioconfigfile'} = "$cnffile";
+		$radiodata["$ln[0]"]{'config'} = "$cfgfile";
+                $radiodata["$ln[0]"]{'calibration'} = "$calfile";
+                $radiodata["$ln[0]"]{'memory'} = "$memfile";
+		$radiodata["$ln[0]"]{'baudrate'} = readConfigfile('BAUDRATE');
+                $radiodata["$ln[0]"]{'serialport'} = readConfigfile('SERIALPORT');
+                $radiodata["$ln[0]"]{'lockfile'} = readConfigfile('LOCKFILE');
+                $radiodata["$ln[0]"]{'digest'} = readConfigfile('DIGEST');
+                $radiodata["$ln[0]"]{'config'} = readConfigfile('CONFIG');
+                $totalradios++;
+                        }
+        close MCONFIGFILE;
+	loadRadio();
+			        }
 	else {
-		createConfig();
-             }
+                createConfig();
+	     }
                 }
 
 ############################################ READCONFIGFILE
@@ -353,18 +390,28 @@ return $ln[1];
 ############################################ CREATECONFIG
 
 sub createConfig {
-	my $localtime = localtime();
         system("clear");
         print "***FT817-OS version $VERSION***\n";
-        print "Copyright Jordan Rubin 2014\n\n";
+        print "Copyright Jordan Rubin [KJ4TLB] 2014\n\n";
 	print "Enter the name of your serial device. i.e. /dev/ttyUSB0\n\n";
 do {
 		print "Serial Port:> ";
                 $serialport = <>;
                 chomp($serialport);
    } while (!$serialport);
-	        print "\nEnter the Baud Rate for your FT817 CAT RATE on Menu item 14 [4800/9600/38400]\n\n";
 
+        print "Would you like to name the radio connected to [$serialport]? Press enter for default [FT817]\n\n";
+do {
+                print "Radio Name:> ";
+                $radioname = <>;
+                chomp($radioname);
+                if (!$radioname){$radioname = 'FT817';}
+   } while (!$radioname);
+
+        print "$radioname\@[$serialport] Will be the default rig on startup\n\n";
+	$default = 'Y'; 	
+
+                print "\nEnter the Baud Rate for your FT817 CAT RATE on Menu item 14 [4800/9600/38400]\n\n";
 do {
 	        print "Baud:> ";
                 $baudrate = <>;
@@ -372,7 +419,7 @@ do {
 		if ($baudrate != '38400' && ($baudrate != '4800') && ($baudrate != '9600')){$baudrate = undef;}
    } while (!$baudrate); 
 
-        print "\nDo you wish to use a lock file for your serial port using /var/lock/ft817 (RECOMMENDED) Y/N\n\n";
+        print "\nDo you wish to use a lock file for your serial port using /var/lock/$radioname (RECOMMENDED) Y/N\n\n";
 do {
         print "Lock File:> ";
                 $lockfile = <>;
@@ -381,10 +428,12 @@ do {
 		if ($lockfile ne 'y' && ($lockfile ne 'n')) {$lockfile = undef;}
    } while (!$lockfile);
 	if ($lockfile eq 'y'){
-		$lockfile = '/var/lock/ft817';
+		$lockfile = "\/var\/lock/$radioname";
 			     }
 	print "Here are your settings:\n";
+	printf "%-11s %-15s\n", "NAME:", "$radioname";
 	printf "%-11s %-15s\n", "SERIALPORT:", "$serialport";
+        printf "%-11s %-15s\n", "DEFAULT:", "$default";
 	printf "%-11s %-15s\n", "BAUDRATE:", "$baudrate";
 	printf "%-11s %-15s\n", "LOCKFILE:", "$lockfile";
 do {
@@ -395,74 +444,99 @@ do {
    } while (!$prompt);
 
 		if ($prompt eq 'n'){createConfig();}
-	print "\nAn attempt will now be made to connect to the rig with this configuration\nSerial should be connected with power on.....\n\n";
+	print "\nAn attempt will now be made to connect to $radioname\@$serialport with this configuration\nSerial should be connected with power on.....\n\n";
+		if ($default eq 'Y'){$activeradio = $radioname;}
 
-		our $FT817 = new Ham::Device::FT817COMM  (
+		our $activeradio = new Ham::Device::FT817COMM  (
         	serialport => "$serialport",
         	baud => "$baudrate",
         	lockfile => "$lockfile"
-		                                         );
-		my $test = $FT817->catgetMode();
+  		                                               );
+
+	my $directory = "config";
+	if (-d "$directory") {
+		#blank
+			     }
+	else {
+	unless(mkdir $directory) {
+		die "Unable to create $directory";
+				 }
+	chmod(0644, $directory) or die "Couldn't chmod $directory: $!";
+	     }
+		my $test = $activeradio->catgetMode();
 		my $times;
 		my @digest;
-                $FT817->setVerbose(0);
-		if ($test){print "\nConnection sucessfull!!!!!\n\n";
-		print "Backing up FT817 calibration settings: ";
-                if (-e $softcalfile) {
-			print "----> SKIPPING : Calibration file $softcalfile exists already!!!!\n";
+                $softcalfile = join('',"$radioname",'.cal');
+                $activeradio->setVerbose(0);
+		if ($test){print "\nConnection with $serialport\@$radioname sucessfull!!!!!\n\n";
+		print "Backing up calibration settings: ";
+                if (-e "config/$softcalfile") {
+			print "----> SKIPPING : Calibration file /config/$softcalfile exists already!!!!\n";
 				     }
 		else {
-			$FT817->getSoftcal('FILE', "$softcalfile");
-			print "----> OK\n";
+			$activeradio->getSoftcal('FILE', "config/$softcalfile");
+			print "       ----> OK\n";
 		     }
 		print "Generating 5 Pass Calibration Hash: ";
 
   for( $times = 0; $times != 5; $times = $times + 1 ){
-                $output = $FT817->getSoftcal('DIGEST');
+                $output = $activeradio->getSoftcal('DIGEST');
 		push (@digest, "$output");
 						     }
 		if ($digest['0'] eq $digest['1'] && $digest['0'] eq $digest['2'] && $digest['0'] eq $digest['3'] && $digest['0'] eq $digest['4']) {
 			our $digest = $digest['0'];
-			print "   ----> OK\n";
+			print "    ----> OK\n";
 						      												  }
 		else {
 			print "   ----> ERROR!!! Check your cabling and restart this program\n";
-			$FT817->closePort();
+			$activeradio->closePort();
 		die;
 		     }
 
 		print "Retrieving Software Jumper settings: ";
-		our $jumpconfig = $FT817->getConfig();
-		print "  ----> OK\n";
-		print "Config file being created:  ";
-        open  FILE , ">>", "$configfile" or print"Can't open $configfile. error\n";
-        print FILE "\############ FT817 os configuration file\n";
-        print FILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
-        print FILE "SERIALPORT=$serialport\n";
-	print FILE "BAUDRATE=$baudrate\n";
-        print FILE "LOCKFILE=$lockfile\n";
-	print FILE "CONFIG=$jumpconfig\n";
-	print FILE "DIGEST=$digest['1']\n";
-		close FILE;
+		our $jumpconfig = $activeradio->getConfig();
+		print "   ----> OK\n";
+		print "Config files being created:  ";
+
+        open  MCONFIGFILE , ">>", 'config/radiolist.cfg' or print"Can't open config/radiolist.cfg error\n";
+        print MCONFIGFILE "\############ FT817 Radio List File\n";
+        print MCONFIGFILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
+        print MCONFIGFILE "0 $radioname Y\n";
+        close MCONFIGFILE;
+
+        $configfile = join('',"$radioname",'.cfg');
+        open  RCONFIGFILE , ">>", "config/$configfile" or print"Can't open config/$configfile. error\n";
+        print RCONFIGFILE "\############ FT817 os configuration file\n";
+        print RCONFIGFILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
+        print RCONFIGFILE "NAME=$radioname\n";
+        print RCONFIGFILE "DEFAULT=$default\n";
+        print RCONFIGFILE "SERIALPORT=$serialport\n";
+	print RCONFIGFILE "BAUDRATE=$baudrate\n";
+        print RCONFIGFILE "LOCKFILE=$lockfile\n";
+	print RCONFIGFILE "CONFIG=$jumpconfig\n";
+	print RCONFIGFILE "DIGEST=$digest['1']\n";
+		close RCONFIGFILE;
 		print "           ----> OK\n";	
- 	print "\nBacking up FT817 memory: ";
-                if (-e $memoryfile) {
-                        print "----> SKIPPING : Memory file $memoryfile exists already!!!!\n";
+        $memoryfile = join('',"$radioname",'.mem');
+ 	print "\nBacking up $radioname memory: ";
+                if (-e "config/$memoryfile") {
+                        print "----> SKIPPING : Memory file config/$memoryfile exists already!!!!\n";
                                      }
                 else {
-                        $FT817->saveMemory("$memoryfile");
+                        $activeradio->saveMemory("config/$memoryfile");
                      }
-        print "Backing up FT817 config: ";
-                if (-e $radioconfigfile) {
-                        print "----> SKIPPING : Config file $radioconfigfile exists already!!!!\n";
+        $radioconfigfile = join('',"$radioname",'.cnf');
+        print "Backing up $radioname config: ";
+                if (-e "config/$radioconfigfile") {
+                        print "----> SKIPPING : Config file config/$radioconfigfile exists already!!!!\n";
                                      }
                 else {
-                        $FT817->saveConfig("$radioconfigfile");
+                        $activeradio->saveConfig("config/$radioconfigfile");
                      }
 
-        $FT817->setVerbose(0);
+        $activeradio->setVerbose(0);
 	print"\n\nRe-starting OS.........\n\n";
-	$FT817->closePort();
+	$activeradio->closePort();
 	sleep 1;
 	print "LOAD \"\*\"\,8\,1\n";
 	sleep 1;
@@ -473,7 +547,6 @@ do {
 	print "READY\n";
 	sleep 1;
 	print "RUN\n";
-
 startUpcheck();
 return 0;
 			  }
@@ -486,7 +559,7 @@ return 0;
 sub banner {
 	system("clear");
 	print "***FT817-OS version $VERSION***\nRelease FT817COMM($version)\n";
-	print "Copyright Jordan Rubin 2014, Perl Artistic license II\n";
+	print "Copyright Jordan Rubin [KJ4TLB] 2014, Perl Artistic license II\n";
 	print "Connected on $serialport at $baudrate bps\n";
 	if($lockfile){print"Locked port at $lockfile\n";}
 	print "\nType 'help' for commands\n\n";
@@ -496,8 +569,8 @@ sub banner {
 
 sub prompt {
         my ($size) = @_;
-	if ($write){our $prompt = "\[FT817\]\@$serialport\/$currentdir:\# ";}
-	else {our $prompt = "\[FT817\]\@$serialport\/$currentdir:\$ ";}
+	if ($write){our $prompt = "\[$radioname\]\@$serialport\/$currentdir:\# ";}
+	else {our $prompt = "\[$radioname\]\@$serialport\/$currentdir:\$ ";}
 	print "$prompt";
 	$input = <>;
 	chomp $input;
@@ -559,8 +632,8 @@ return 1;	     }
 
 sub testCal {
                 print "CHECKING SOFTWARE CALIBRATION: ";
-                my $digest = $FT817->getSoftcal('DIGEST');
-                if ($digest eq $saveddigest){print "CALIBRATION [OK]\n";
+                my $mydigest = $FT817->getSoftcal('DIGEST');
+                if ($mydigest eq $saveddigest){print "CALIBRATION [OK]\n";
 return 0;
                                                 }
                 else {
@@ -581,6 +654,8 @@ return 0;
 
 sub rebuildSoftcal {
                 my $value2 = shift;
+        	if (!$value2){$value2 = $softcalfile;}
+		if($value2 eq $softcalfile){print "You used the default filename [$value2]. This will overwrite your software calibration.\n";}
                 print "This is going to re-write your entire software calibration from backup!!! Are you absolutely sure [Y/N]?\nANSWER: ";
                 my $question = <>;
                 chomp $question;
@@ -951,6 +1026,438 @@ sub showStatus {
 		print "\n";
 return 0;
 	       }
+
+
+############################################ SHOWRADIOS
+
+sub showRadios {
+
+print "Installed Radios\n\n";
+        my $radionumber = 0;
+foreach (@radiodata) {
+        my $rnumber = $radiodata["$radionumber"]->{'number'};
+        my $name = $radiodata["$radionumber"]->{'name'};
+        my $serialport = $radiodata["$radionumber"]->{'serialport'};
+        my $baudrate = $radiodata["$radionumber"]->{'baudrate'};
+        my $lockfile = $radiodata["$radionumber"]->{'lockfile'};
+        my $savedconfig = $radiodata["$radionumber"]->{'config'};
+        my $saveddigest = $radiodata["$radionumber"]->{'digest'};
+        my $configfile = $radiodata["$radionumber"]->{'configfile'};
+        my $memoryfile = $radiodata["$radionumber"]->{'memory'};
+        my $radioconfigfile = $radiodata["$radionumber"]->{'radioconfigfile'};
+        my $softcalfile = $radiodata["$radionumber"]->{'calibration'};
+        my $default = $radiodata["$radionumber"]->{'default'};
+        print "RADIO [$radionumber]\n";
+        printf "%-11s %-15s\n", "NAME:", "$name";
+        printf "%-11s %-15s\n", "PORT:", "$serialport";
+        printf "%-11s %-15s\n", "BAUDRATE:", "$baudrate";
+        printf "%-11s %-15s\n", "LOCKFILE:", "$lockfile";
+        printf "%-11s %-15s\n", "CONFIG:", "$savedconfig";
+        printf "%-11s %-15s\n", "DEFAULT:", "$default";
+	print "\n";
+        $radionumber++;
+                     }
+return 0;
+	       }
+
+############################################ SWITCHRADIO
+
+sub switchRadio {
+        my $newradio = shift;
+	my $found;
+	my $newnumber;
+        if (!$newradio){
+                print "You must choose a radio name or number. Type [show radios] for a listing\n";
+return 1;
+                       }
+       my $radionumber = 0;
+	foreach (@radiodata) {
+        	my $name = $radiodata["$radionumber"]->{'name'};
+		if ($name eq $newradio){$found = 1; $newnumber = $radionumber;}
+		$radionumber++;
+			     }
+if ($found != ''){
+print "Found $newradio number $newnumber\n";
+        our $rnumber = $radiodata["$newnumber"]->{'number'};
+        our $name = $radiodata["$newnumber"]->{'name'};
+        our $serialport = $radiodata["$newnumber"]->{'serialport'};
+        our $baudrate = $radiodata["$newnumber"]->{'baudrate'};
+        our $lockfile = $radiodata["$newnumber"]->{'lockfile'};
+        our $savedconfig = $radiodata["newnumber"]->{'config'};
+        our $saveddigest = $radiodata["$newnumber"]->{'digest'};
+        our $configfile = $radiodata["$newnumber"]->{'configfile'};
+        our $memoryfile = $radiodata["$newnumber"]->{'memory'};
+        our $radioconfigfile = $radiodata["$newnumber"]->{'radioconfigfile'};
+        our $softcalfile = $radiodata["$newnumber"]->{'calibration'};
+        my $default = $radiodata["$newnumber"]->{'default'};
+	$FT817->closePort();
+	our $radioname = $name;
+        print "Activating $name\n";
+        our $FT817 = new Ham::Device::FT817COMM  (
+        serialport => "$serialport",
+        baud => "$baudrate",
+        lockfile => "$lockfile",
+        name => "$name"
+                                                 );
+        our $prompt = "\[$radioname\]\@$serialport\$ ";
+return 0;
+	   }
+	else {
+                print "Radio [$newradio] not found. Type [show radios] for a listing\n";
+return 1;
+	     }
+	        }
+
+############################################ ADDRADIO
+
+sub addRadio {
+
+	my $newserialport;
+	my $newname;
+	my $newbaudrate;
+	my $newlockfile;
+	my $newdigest;
+	our $newradionumber;
+        print "Enter the name of your serial device. i.e. /dev/ttyUSB0\n\n";
+do {
+                print "Serial Port:> ";
+                $newserialport = <>;
+                chomp($newserialport);
+		my $found;
+		my $thename;
+        my $radionumber = 0;
+        foreach (@radiodata) {
+                my $serials = $radiodata["$radionumber"]->{'serialport'};
+		my $testname = $radiodata["$radionumber"]->{'name'};
+                if ($newserialport eq $serials){$found = 1; $thename = $testname;}
+                $radionumber++;
+                             }
+		$newradionumber = $radionumber++;
+	if ($found){print"Another device [$thename] is using that port, are you sure you want to add a radio to the same port? [Y/N] ";
+do {
+                $prompt = <>;
+                chomp($prompt);
+                if ($prompt ne 'y' && ($prompt ne 'n')) {$prompt = undef;}	
+   } while (!$prompt);
+
+		if ($prompt eq 'n'){$newserialport = undef;}
+		   }
+   } while (!$newserialport);
+		   
+
+        print "Would you like to name the radio connected to [$newserialport]? Press enter for default [FT817]\n\n";
+do {
+                print "Radio Name:> ";
+                $newname = <>;
+                chomp($newname);
+		my $found;
+                if (!$newname){$newname = 'FT817';}
+
+ my $radionumber = 0;
+        foreach (@radiodata) {
+                my $testname = $radiodata["$radionumber"]->{'name'};
+                if ($newname eq $testname){$found = 1;}
+                $radionumber++;
+                             }
+    if ($found){print"Another device is using that name, try another\n"; $newname = undef;}
+
+   } while (!$newname);
+
+
+               print "\nEnter the Baud Rate for your FT817 CAT RATE on Menu item 14 [4800/9600/38400]\n\n";
+do {
+                print "Baud:> ";
+                $newbaudrate = <>;
+                chomp($newbaudrate);
+                if ($newbaudrate != '38400' && ($newbaudrate != '4800') && ($newbaudrate != '9600')){$newbaudrate = undef;}
+   } while (!$newbaudrate);
+
+
+        print "\nDo you wish to use a lock file for your serial port using /var/lock/$newname (RECOMMENDED) Y/N\n\n";
+do {
+        print "Lock File:> ";
+                $newlockfile = <>;
+                chomp($newlockfile);
+                $newlockfile = lc($newlockfile);
+                if ($newlockfile ne 'y' && ($newlockfile ne 'n')) {$lockfile = undef;}
+   } while (!$newlockfile);
+        if ($newlockfile eq 'y'){
+                $newlockfile = "\/var\/lock/$newname";
+                             }
+
+        print "Here are your settings:\n";
+        printf "%-11s %-15s\n", "NAME:", "$newname";
+        printf "%-11s %-15s\n", "SERIALPORT:", "$newserialport";
+        printf "%-11s %-15s\n", "BAUDRATE:", "$newbaudrate";
+        printf "%-11s %-15s\n", "LOCKFILE:", "$newlockfile";
+do {
+        print "\nAre they correct? [y/n] :> ";
+                $prompt = <>;
+                chomp($prompt);
+                if ($prompt ne 'y' && ($prompt ne 'n')) {$prompt = undef;}
+   } while (!$prompt);
+
+                if ($prompt eq 'n'){
+return 0;
+				   }
+        print "\nAn attempt will now be made to connect to $newname\@$newserialport with this configuration\nSerial should be connected with power on.....\n\n";
+	$FT817->closePort();
+
+                our $FT817 = new Ham::Device::FT817COMM  (
+                serialport => "$newserialport",
+                baud => "$newbaudrate",
+                lockfile => "$newlockfile"
+                                                               );
+        	$FT817->setVerbose(0);
+                my $test = $FT817->catgetMode();
+                $FT817->setVerbose(1);
+		my $times;
+                my @digest;
+                my $newsoftcalfile = join('',"$newname",'.cal');
+                $FT817->setVerbose(0);
+                if ($test){print "\nConnection with $newserialport\@$newname sucessfull!!!!!\n\n";}
+		else {print "Connection failed......"; die;}
+
+                print "Backing up calibration settings: ";
+                if (-e "config/$newsoftcalfile") {
+                        print "----> SKIPPING : Calibration file /config/$newsoftcalfile exists already!!!!\n";
+                                     }
+                else {
+                        $FT817->getSoftcal('FILE', "config/$newsoftcalfile");
+                        print "       ----> OK\n";
+                     }
+                print "Generating 5 Pass Calibration Hash: ";
+
+  for( $times = 0; $times != 5; $times = $times + 1 ){
+                $output = $FT817->getSoftcal('DIGEST');
+                push (@digest, "$output");
+                                                     }
+
+
+                if ($digest['0'] eq $digest['1'] && $digest['0'] eq $digest['2'] && $digest['0'] eq $digest['3'] && $digest['0'] eq $digest['4']) {
+                        $newdigest = $digest['0'];
+                        print "    ----> OK\n";
+                                                                                                                                                  }
+                else {
+                        print "   ----> ERROR!!! Check your cabling and restart this program\n";
+                        $FT817->closePort();
+                die;
+                     }
+
+                print "Retrieving Software Jumper settings: ";
+                my $newjumpconfig = $FT817->getConfig();
+                print "   ----> OK\n";
+	        print "Config files being created:  ";
+        open  MCONFIGFILE , ">>", 'config/radiolist.cfg' or print"Can't open config/radiolist.cfg error\n";
+        print MCONFIGFILE "$newradionumber $newname N\n";
+        close MCONFIGFILE;
+        $configfile = join('',"$newname",'.cfg');
+        open  RCONFIGFILE , ">>", "config/$configfile" or print"Can't open config/$configfile. error\n";
+        print RCONFIGFILE "\############ FT817 os configuration file\n";
+        print RCONFIGFILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
+        print RCONFIGFILE "NAME=$newname\n";
+        print RCONFIGFILE "DEFAULT=N\n";
+        print RCONFIGFILE "SERIALPORT=$newserialport\n";
+        print RCONFIGFILE "BAUDRATE=$newbaudrate\n";
+        print RCONFIGFILE "LOCKFILE=$newlockfile\n";
+        print RCONFIGFILE "CONFIG=$newjumpconfig\n";
+        print RCONFIGFILE "DIGEST=$newdigest\n";
+                close RCONFIGFILE;
+               print "           ----> OK\n";
+        $memoryfile = join('',"$newname",'.mem');
+        print "\nBacking up $newname memory: ";
+                if (-e "config/$memoryfile") {
+                        print "----> SKIPPING : Memory file config/$memoryfile exists already!!!!\n";
+                                     }
+                else {
+                        $FT817->saveMemory("config/$memoryfile");
+                     }
+
+        $radioconfigfile = join('',"$newname",'.cnf');
+        print "Backing up $newname config: ";
+                if (-e "config/$radioconfigfile") {
+                        print "----> SKIPPING : Config file config/$radioconfigfile exists already!!!!\n";
+                                     }
+                else {
+                        $FT817->saveConfig("config/$radioconfigfile");
+                     }
+
+        $FT817->setVerbose(0);
+        print"\n\nRe-starting OS.........\n\n";
+        $FT817->closePort();
+        sleep 1;
+        print "LOAD \"\*\"\,8\,1\n";
+        sleep 1;
+        print "SEARCHING FOR \*\n";
+        sleep 1;
+        print "LOADING\n";
+        sleep 1;
+        print "READY\n";
+        sleep 1;
+        print "RUN\n";
+startUpcheck();
+return 0;
+                          }
+
+############################################ REMOVERADIO
+
+sub removeRadio {
+        my $killradio = shift;
+	my $found;
+	my $answer;
+	my $thenumber;
+	my $nodefault = 'false';
+        if (!$killradio) {
+                print "You must choose a radio name or number. Type [show radios] for a listing\n";
+return 1;
+                         }
+
+        if ($killradio eq $radioname) {
+                print "You cannot remove the active radio [$radioname]\n";
+return 1;
+                                      }
+
+
+
+        my $radionumber = 0;
+        foreach (@radiodata) {
+                my $name = $radiodata["$radionumber"]->{'name'};
+                if ($name eq $killradio){$found = 1; $thenumber = $radionumber;}
+                $radionumber++;
+                             }
+	if (!$found) {
+                print "Radio [$killradio] Doesn't exist. Type [show radios] for a listing\n";
+return 1;
+		     }
+
+	else {
+		print "This will completely remove [$killradio] from the system, are you sure?[Y/N] ";
+do {
+                $answer = <>;
+                chomp($answer);
+                $answer = lc($answer);
+                if ($answer ne 'y' && ($answer ne 'n')) {$answer = undef;}
+   } while (!$answer);
+	if ($answer eq 'n'){return 0;}
+	if ($answer eq 'y'){
+		print "\nRemoving [$killradio] configs ";
+		my $cal = join ('','config/',"$killradio",'.cal');
+		my $mem = join ('','config/',"$killradio",'.mem');
+                my $cfg = join ('','config/',"$killradio",'.cfg');
+                my $cnf = join ('','config/',"$killradio",'.cnf');
+		unlink($cal,$mem,$cfg,$cnf);
+		print "      -----> [OK]\n";
+		print "Removing [$killradio] from listing \n";
+                my @ln;
+                my @radiodata;
+		my $cfg_line;
+                open(MCONFIGFILE, 'config/radiolist.cfg') or die("Unable to open file");
+                my @mconfigdata = <MCONFIGFILE>;
+		my $currentradio = 0;
+                foreach $cfg_line (@mconfigdata)
+                        {
+                        if (index($cfg_line,"#")==0) { next; }
+			if (index($cfg_line,"$thenumber")==0) { next; }
+                        @ln=split(" ",$cfg_line);
+                        $radiodata["$currentradio"]{'number'} = "$currentradio";
+                        $radiodata["$currentradio"]{'name'} = "$ln[1]";
+                        $radiodata["$currentradio"]{'default'} = "$ln[2]";
+			if ($ln[2] eq 'Y'){$nodefault = 'true';}
+			$currentradio++;
+			}
+        open  MCONFIGFILE , ">", 'config/radiolist.cfg' or print"Can't open config/radiolist.cfg error\n";
+        print MCONFIGFILE "\############ FT817 Radio List File\n";
+        print MCONFIGFILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
+        my $radionumber = 0;
+	my $thedefault;
+	my $defname;
+        foreach (@radiodata) {
+                my $thename = $radiodata["$radionumber"]{'name'};
+
+		if ($nodefault eq 'false'){
+			if ($radionumber == 0){print "Changing $thename to the default radio... ";
+			$defname = "$thename"; 
+  				          }
+					  }
+
+		if ($nodefault eq 'true') {
+                $thedefault = $radiodata["$radionumber"]{'default'};
+		                          }
+
+                print MCONFIGFILE "$radionumber $thename $thedefault\n";
+                $radionumber++;
+                             }
+        close MCONFIGFILE;
+	print " -----> [OK]\n";
+	
+		print "[$killradio] removed\n";
+if ($defname) {defaultRadio("$defname");}
+                        $FT817->closePort();
+startUpcheck();
+return 0;
+			   }
+	     }
+return 0;
+	     }
+
+############################################ DEFAULTRADIO
+
+sub defaultRadio {
+        my $newdefault = shift;
+        my $found;
+        my $newnumber;
+        if (!$newdefault){
+                print "You must choose a radio name or number. Type [show radios] for a listing\n";
+return 1;
+                         }
+
+	my $radionumber = 0;
+        foreach (@radiodata) {
+                my $name = $radiodata["$radionumber"]->{'name'};
+                if ($name eq $newdefault){$found = 1; $newnumber = $radionumber;}
+                $radionumber++;
+                             }
+
+	if ($found != ''){
+		my @ln;
+		my @radiodata;
+                open(MCONFIGFILE, 'config/radiolist.cfg') or die("Unable to open file");
+                my @mconfigdata = <MCONFIGFILE>;
+                foreach $cfg_line (@mconfigdata)
+                        {
+                        if (index($cfg_line,"#")==0) { next; }
+                	@ln=split(" ",$cfg_line);
+                	$radiodata["$ln[0]"]{'number'} = "$ln[0]";
+                	$radiodata["$ln[0]"]{'name'} = "$ln[1]";
+			if ($radiodata["$ln[0]"]{'name'} eq "$newdefault"){
+				print "Setting $newdefault as the startup radio\n";
+		                $radiodata["$ln[0]"]{'default'} = "Y";
+									  }
+			else {
+               			$radiodata["$ln[0]"]{'default'} = "N";
+	     		     }
+			}
+
+        open  MCONFIGFILE , ">", 'config/radiolist.cfg' or print"Can't open config/radiolist.cfg error\n";
+        print MCONFIGFILE "\############ FT817 Radio List File\n";
+        print MCONFIGFILE "\############ Generated by createConfig on $localtime\n#\n#\n#\n";
+        my $radionumber = 0;
+        foreach (@radiodata) {
+		my $thename = $radiodata["$radionumber"]{'name'};
+        	my $thedefault = $radiodata["$radionumber"]{'default'};
+        	print MCONFIGFILE "$radionumber $thename $thedefault\n";
+                $radionumber++;
+                             }
+        close MCONFIGFILE;
+return 0;
+			 }
+
+        else {
+                print "Radio [$newdefault] not found. Type [show radios] for a listing\n";
+return 1;
+             }
+		 }
+
 ############################################ MEMQMB
 sub memqmb {
         $FT817->setVerbose(0);
@@ -1404,20 +1911,82 @@ do {
 return 0;
 	       }
 
+
+############################################ LOADRADIO
+
+sub loadRadio {
+        my $radionumber = 0;
+foreach (@radiodata) {
+        my $default = $radiodata["$radionumber"]->{'default'};
+        if ($default eq 'Y'){
+        our $rnumber = $radiodata["$radionumber"]->{'number'};
+        our $name = $radiodata["$radionumber"]->{'name'};
+        our $serialport = $radiodata["$radionumber"]->{'serialport'};
+        our $baudrate = $radiodata["$radionumber"]->{'baudrate'};
+        our $lockfile = $radiodata["$radionumber"]->{'lockfile'};
+        our $savedconfig = $radiodata["$radionumber"]->{'config'};
+        our $saveddigest = $radiodata["$radionumber"]->{'digest'};
+        our $configfile = $radiodata["$radionumber"]->{'configfile'};
+        our $memoryfile = $radiodata["$radionumber"]->{'memory'};
+        our $radioconfigfile = $radiodata["$radionumber"]->{'radioconfigfile'};
+        our $softcalfile = $radiodata["$radionumber"]->{'calibration'};
+                our $radioname = $name;
+                our $activenumber = $rnumber;
+        print "Activating $name\n";
+        our $FT817 = new Ham::Device::FT817COMM  (
+        serialport => "$serialport",
+        baud => "$baudrate",
+        lockfile => "$lockfile",
+        name => "$name"
+                                                );
+                            }
+        $radionumber++;
+                     }
+
+
+	}
+
 ################################################################################### BEGIN OS HERE
 
 startUpcheck();
+#        my $radionumber = 0;
+#foreach (@radiodata) { 
+#        my $default = $radiodata["$radionumber"]->{'default'};
+#        if ($default eq 'Y'){
+#	our $rnumber = $radiodata["$radionumber"]->{'number'};
+#	our $name = $radiodata["$radionumber"]->{'name'};
+#        our $serialport = $radiodata["$radionumber"]->{'serialport'};
+#        our $baudrate = $radiodata["$radionumber"]->{'baudrate'};
+#        our $lockfile = $radiodata["$radionumber"]->{'lockfile'};
+#        our $savedconfig = $radiodata["$radionumber"]->{'config'};
+#        our $saveddigest = $radiodata["$radionumber"]->{'digest'}; 
+#        our $configfile = $radiodata["$radionumber"]->{'configfile'};
+#        our $memoryfile = $radiodata["$radionumber"]->{'memory'};
+#        our $radioconfigfile = $radiodata["$radionumber"]->{'radioconfigfile'};
+#        our $softcalfile = $radiodata["$radionumber"]->{'calibration'};
+#		our $radioname = $name; 
+#		our $activenumber = $rnumber;
+#	print "Activating $name\n";
+#        our $FT817 = new Ham::Device::FT817COMM  (
+#        serialport => "$serialport",
+#        baud => "$baudrate",
+#        lockfile => "$lockfile",
+#	name => "$name"
+#                                                );
+#			    }
+#	$radionumber++;
+#		     } 
 
-	our $FT817 = new Ham::Device::FT817COMM  (
-        serialport => "$serialport",
-        baud => "$baudrate",
-        lockfile => "$lockfile"
-        	                                 );
 	$version = $FT817->moduleVersion();
-	our $prompt = "\[FT817\]\@$serialport\$ ";
+	our $prompt = "\[$radioname\]\@$serialport\$ ";
 	banner();
-	testConfig();
-	testCal();
+	my $test1 = testConfig();
+	my $test2 = testCal();
+print "TOTAL RADIOS IN CONFIG [$totalradios]\n";
+	if ($test1 == 1){
+		if ($test1 == $test2){print "\n\n***********BOTH TESTS FAILED... ARE YOU SURE THE CORRECT RADIO IS CONNECTED TO $serialport???***********\n\n";}
+			}
+
 #####STARTUP FLAGS SHOULD BE SET OR UNSET HERE
 	$FT817->setVerbose(1);
 #	$FT817->setBitwatch(1);
@@ -1558,6 +2127,11 @@ do {
 		$FT817->setVerbose(1);
 					    }
 	elsif ($data eq 'show status') {showStatus();}
+	elsif ($data eq 'show radios') {showRadios();}
+        elsif ($name eq 'switch' && $value eq 'radio') {switchRadio("$value2");}
+        elsif ($name eq 'default' && $value eq 'radio') {defaultRadio("$value2");}
+        elsif ($name eq 'add' && $value eq 'radio') {addRadio();}
+        elsif ($name eq 'remove' && $value eq 'radio') {removeRadio("$value2");}
 	elsif ($data eq 'show flags') {$output = $FT817->getFlags();}
 	elsif ($data eq 'write enable') {
 		$output = $FT817->setWriteallow(1);
